@@ -1,0 +1,86 @@
+version: '3'
+
+tasks:
+  create-local-cluster:
+    desc: "Create a local Kubernetes cluster using KinD."
+    cmds:
+      - echo "🚀 Creating local cluster"
+      - kind create cluster --config kind-config.yaml --name srekubecraft
+      - kind get clusters
+    silent: true
+
+  setup-kube-context:
+    desc: "Set up the Kubernetes context for the local cluster."
+    cmds:
+      - echo "🔧 Setting up Kubernetes context"
+      - kubectl cluster-info --context kind-srekubecraft
+    silent: true
+
+  delete-local-cluster:
+    desc: "Delete the local Kubernetes cluster."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "🗑️ Deleting local cluster"
+      - kind delete cluster -n srekubecraft
+    silent: true
+  
+  helm-prereqs:
+    desc: "Add the Chaos Mesh Helm repository and create the chaos-mesh namespace."
+    cmds:
+      - helm repo add chaos-mesh https://charts.chaos-mesh.org
+      - helm repo update
+      - kubectl create namespace chaos-mesh
+    silent: true
+
+  install-chaos-mesh:
+    desc: "Install Chaos Mesh for Kubernetes-native chaos engineering and fault injection."
+    deps:
+      - setup-kube-context
+      - helm-prereqs
+    cmds:
+      - echo "🌀 Installing Chaos Mesh..."
+      - helm install chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --set chaosDaemon.runtime=containerd --set chaosDaemon.socketPath=/run/containerd/containerd.sock --version 2.6.3
+      - kubectl get pods --namespace chaos-mesh -l app.kubernetes.io/instance=chaos-mesh
+    silent: true
+
+  get-golang-response-echoer:
+    desc: "Get the Golang Response Echoer application."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "🚀 Getting the Golang Response Echoer application"
+      - git clone https://github.com/NoNickeD/golang-response-echoer.git || echo "Repository already cloned"
+      - cd golang-response-echoer
+      - |
+        if ! docker images --filter=reference='golang-response-echoer:latest' | grep -q 'golang-response-echoer'; then
+          echo "Image does not exist. Building the image..."
+          docker build -t golang-response-echoer:latest .
+        else
+          echo "Image already exists. Skipping build..."
+        fi
+      - kind load docker-image golang-response-echoer:latest --name srekubecraft
+      - kubectl apply -f echo-server.yaml
+    silent: true
+
+  install-metric-server:
+    desc: "Install the Kubernetes Metrics Server."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "📊 Installing the Kubernetes Metrics Server"
+      - helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+      - helm repo update metrics-server
+      - helm install metrics-server metrics-server/metrics-server --namespace kube-system --set args[0]="--kubelet-insecure-tls"
+    silent: true
+
+
+  full-deploy-local:
+    desc: "Deploy the full application stack to the local Kubernetes cluster."
+    cmds:
+      - echo "🚀 Deploying the full application stack"
+      - task: create-local-cluster
+      - task: install-chaos-mesh
+      - task: install-metric-server
+      - task: get-golang-response-echoer
+    silent: true
